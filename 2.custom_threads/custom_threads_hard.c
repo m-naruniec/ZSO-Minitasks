@@ -12,6 +12,7 @@
 #include <asm/errno.h>
 
 #define STACK_SIZE (4 * 1024 * 1024) // 4 MB
+#define WRITE_TIMES 3
 
 int my_exit() {
 	__asm__ (
@@ -37,14 +38,10 @@ int my_write(long long fd, const char *buff, long long len) {
 	);
 }
 
-void my_clone() {
-}
-
-
 int entry(void) {
-    for(int i = 0; i < 1000; ++i) {
+    for(int i = 0; i < WRITE_TIMES; ++i) {
         //write(1, "A\n", 2);
-		my_write(1, "A\n", 2);
+		my_write(2, "A\n", 2);
 
 	}
     //_exit(0);
@@ -53,11 +50,11 @@ int entry(void) {
 
 int my_wait() {
 	__asm__ (
-		"movq %0, %%r10;"
+		"movq %%rcx, %%r10;"
 		"syscall;"
 		:
-		: "D" (-1LL), "S" (0LL), "d" (0LL), "r" (0LL), "a" ((long long)SYS_wait4)
-		: "%r10", "%rcx", "%r11"
+		: "D" (-1LL), "S" (0LL), "d" (0LL), "c" (0LL), "a" ((long long)SYS_wait4)
+		: "%r10", "%r11"
 	);
 }
 
@@ -79,33 +76,54 @@ void *create_stack() {
 	: "%r10", "%r8", "%r9", "%r11"
 	);
 	printf("%p\n", res); fflush(stdout);
-	printf("%s\n", strerror(-(int)res));
 	return res;
 }
 
-pid_t create_thread(int (*fn)(void *)) {
+
+void my_clone(int (*fn)(void *), void *child_stack) {
+	child_stack += STACK_SIZE - 16;
+	*(uint64_t *)child_stack = (uint64_t)fn;
+	*(uint64_t *)(child_stack + 8) = (uint64_t)fn;
+	__asm__ (
+		"movq %%rcx, %%r10;"
+		"syscall;"
+	:
+	: "D" (SIGCHLD | CLONE_FILES | CLONE_FS | CLONE_IO | CLONE_PTRACE
+		   | CLONE_SIGHAND | CLONE_VM),
+	"S" ((long long)child_stack),
+	"d" ((long long)1),
+	"c" ((long long)0),
+	"a" ((long long)SYS_clone)
+	: "%r10", "%r8", "%r9", "%r11"//, "%rcx"
+	);
+}
+
+
+void create_thread(int (*fn)(void *)) {
     //void *child_stack = mmap(NULL, STACK_SIZE, PROT_WRITE | PROT_READ,
-      //                       MAP_ANONYMOUS | MAP_PRIVATE | MAP_GROWSDOWN,
-        //                     -1, 0);
+    //                         MAP_ANONYMOUS | MAP_PRIVATE | MAP_GROWSDOWN,
+    //                         -1, 0);
     void *child_stack = create_stack();
 
 	printf("%p\n", child_stack); fflush(stdout);
 
 	//child_stack += STACK_SIZE - 8;
     //*(uint64_t *)child_stack = (uint64_t)fn;
-    return clone(fn, child_stack + STACK_SIZE,
-                 SIGCHLD | CLONE_FILES | CLONE_FS | CLONE_IO | CLONE_PTRACE
-                 | CLONE_SIGHAND | CLONE_VM, NULL);
+    //return clone(fn, child_stack + STACK_SIZE,
+    //             SIGCHLD | CLONE_FILES | CLONE_FS | CLONE_IO | CLONE_PTRACE
+    //             | CLONE_SIGHAND | CLONE_VM, NULL);
+	my_clone(fn, child_stack);
 }
 
 
 int main() {
-    pid_t child_pid = create_thread((int (*)(void *))&entry);
-    for(int i = 0; i < 1000; ++i) {
+    //pid_t child_pid =
+	create_thread((int (*)(void *))&entry);
+    for(int i = 0; i < WRITE_TIMES; ++i) {
         write(1, "B\n", 2);
     }
     my_wait();
-	sleep(15);
+	//sleep(15);
     //exit(0);
 	my_exit();
 }

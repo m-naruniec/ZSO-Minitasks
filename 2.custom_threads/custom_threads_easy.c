@@ -4,9 +4,10 @@
 #include <wait.h>
 #include <sched.h>
 #include <sys/mman.h>
-#include <unitypes.h>
+//#include <unitypes.h>
+#include <stdint.h>
 
-#define STACK_SIZE 4 * 1024 * 1024 // 4 MB
+#define STACK_SIZE (4 * 1024 * 1024) // 4 MB
 
 int entry(void) {
     for(int i = 0; i < 1000; ++i) {
