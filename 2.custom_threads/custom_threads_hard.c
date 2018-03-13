@@ -1,4 +1,4 @@
-//compilation: gcc -O0 -nostdlib -o custom_threads_hard custom_threads_hard.c
+//compilation: gcc -nostdlib -o custom_threads_hard custom_threads_hard.c
 #define _GNU_SOURCE
 #include <unistd.h>
 #include <wait.h>
@@ -7,31 +7,40 @@
 #include <stdint.h>
 #include <syscall.h>
 
-#define STACK_SIZE (4 * 1024 * 1024) // 4 MB
-#define WRITE_TIMES 1000
+#define STACK_SIZE (4 * 1024) // 4 KB
+#define WRITE_TIMES 2
+
+void entry(void);
 
 void my_exit() {
-	__asm__ (
-		"movq %0, %%rdi;"
-		"movq %1, %%rax;"
+	register uint64_t status_reg asm("rdi") = 1;
+	register uint64_t sys_reg asm("rax") = SYS_exit;
+
+	asm volatile (
 		"syscall;"
 		:
-		: "r" (0LL), "r" ((uint64_t)SYS_exit)
-		: "%rdi", "%rax", "%rcx", "%r11"
+		: "r" (status_reg), "r" (sys_reg)
+		: "%rcx", "%r11"
 	);
 }
 
-void my_write(long long fd, const char *buff, long long len) {
-	__asm__ (
+void my_write(uint64_t fd, const char *buff, uint64_t len) {
+	register uint64_t fd_reg asm("rdi") = fd;
+	register uint64_t buff_reg asm("rsi") = (uint64_t)buff;
+	register uint64_t len_reg asm("rdx") = len;
+	register uint64_t sys_reg asm("rax") = SYS_write;
+
+	asm volatile (
 		"syscall;"
-		:
-		: "D" (fd), "S" ((uint64_t)buff), "d" (len), "a" ((uint64_t)SYS_write)
+		: "=r" (sys_reg)
+		: "r" (fd_reg), "r" (buff_reg), "r" (len_reg), "r" (sys_reg)
 		: "%rcx", "%r11"
 	);
 }
 
 void my_wait() {
-	__asm__ (
+
+	asm volatile (
 		"movq %%rcx, %%r10;"
 		"syscall;"
 		:
@@ -42,40 +51,55 @@ void my_wait() {
 }
 
 void *create_stack() {
-	void *res = NULL;
-	__asm__ (
-			"movq %%rcx, %%r10;"
-			"movq %1, %%r8;"
-			"movq %2, %%r9;"
+	register uint64_t addr_reg asm("rdi") = 0;
+	register uint64_t size_reg asm("rsi") = STACK_SIZE;
+	register uint64_t prot_reg asm("rdx") = (PROT_WRITE | PROT_READ);
+	register uint64_t flags_reg asm("r10") = (MAP_ANONYMOUS | MAP_PRIVATE | MAP_GROWSDOWN);
+	register int64_t fd_reg asm("r8") = -1;
+	register uint64_t off_reg asm("r9") = 0;
+	register uint64_t sys_reg asm("rax") = SYS_mmap;
+
+	asm volatile (
 			"syscall;"
-			: "=a" ((uint64_t)res)
-			: "D" (0LL),
-			  "S" ((uint64_t)STACK_SIZE),
-			  "d" ((uint64_t)(PROT_WRITE | PROT_READ)),
-			  "c" ((uint64_t)(MAP_ANONYMOUS | MAP_PRIVATE | MAP_GROWSDOWN)),
-			  "r" (-1LL),
-			  "r" (0LL),
-			  "a" ((uint64_t)SYS_mmap)
-			: "%r10", "%r8", "%r9", "%r11"
+			: "=a" (sys_reg)
+			: "r" (addr_reg),
+			  "r" (size_reg),
+			  "r" (prot_reg),
+			  "r" (flags_reg),
+			  "r" (fd_reg),
+			  "r" (off_reg),
+			  "r" (sys_reg)
+			: "%rcx", "%r11"
 	);
-	return res;
+	return (void *)sys_reg;
 }
 
 void my_clone(int (*fn)(void *), void *child_stack) {
-	child_stack += STACK_SIZE - 16;
-	*(uint64_t *)(child_stack + 8) = (uint64_t)fn;
-	__asm__ (
-		"movq %%rcx, %%r10;"
-		"syscall;"
-		:
-		: "D" (SIGCHLD | CLONE_FILES | CLONE_FS | CLONE_IO | CLONE_PTRACE
-		   | CLONE_SIGHAND | CLONE_VM),
-		  "S" ((uint64_t)child_stack),
-		  "d" (1LL),
-		  "c" (0LL),
-		  "a" ((uint64_t)SYS_clone)
-		: "%r10", "%r8", "%r9", "%r11"
+	child_stack += STACK_SIZE;
+
+	register uint64_t flags_reg asm("rdi") =
+		(SIGCHLD | CLONE_FILES | CLONE_FS | CLONE_IO
+		 | CLONE_PTRACE | CLONE_SIGHAND | CLONE_VM);
+	register uint64_t stack_reg asm("rsi") = (uint64_t)child_stack;
+	register uint64_t ptid_reg asm("rdx") = 1;
+	register uint64_t ctid_reg asm("r10") = 0;
+	register uint64_t sys_reg asm("rax") = SYS_clone;
+
+	asm volatile (
+	"syscall;"
+	: "=a" (sys_reg)
+	: "r" (flags_reg),
+	  "r" (stack_reg),
+	  "r" (ptid_reg),
+	  "r" (ctid_reg),
+	  "r" (sys_reg)
+	: "%rcx", "%r11"
 	);
+
+	if(!sys_reg) {
+		entry();
+	}
+
 }
 
 void create_thread(int (*fn)(void *)) {
@@ -84,7 +108,7 @@ void create_thread(int (*fn)(void *)) {
 }
 
 void entry(void) {
-	int i;
+	uint32_t i;
 	for(i = 0; i < WRITE_TIMES; ++i) {
 		my_write(2, "A\n", 2);
 	}
@@ -93,7 +117,7 @@ void entry(void) {
 
 int _start() {
 	create_thread((int (*)(void *))&entry);
-	int i;
+	uint32_t i;
 	for(i = 0; i < WRITE_TIMES; ++i) {
 		my_write(1, "B\n", 2);
 	}
