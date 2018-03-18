@@ -75,7 +75,8 @@ void *create_stack() {
 }
 
 void my_clone(int (*fn)(void *), void *child_stack) {
-	child_stack += STACK_SIZE;
+	child_stack += STACK_SIZE - 8;
+	*(uint64_t *)child_stack = (uint64_t)fn;
 
 	register uint64_t flags_reg asm("rdi") =
 		(SIGCHLD | CLONE_FILES | CLONE_FS | CLONE_IO
@@ -86,19 +87,20 @@ void my_clone(int (*fn)(void *), void *child_stack) {
 	register uint64_t sys_reg asm("rax") = SYS_clone;
 
 	asm volatile (
-	"syscall;"
-	: "=a" (sys_reg)
-	: "r" (flags_reg),
-	  "r" (stack_reg),
-	  "r" (ptid_reg),
-	  "r" (ctid_reg),
-	  "r" (sys_reg)
-	: "%rcx", "%r11"
+		"jmp 2f;"
+		"1:\n"
+			"syscall;"
+			"ret;"
+		"2:\n"
+			"call 1b;"
+		: "=a" (sys_reg)
+		: "r" (flags_reg),
+		  "r" (stack_reg),
+		  "r" (ptid_reg),
+		  "r" (ctid_reg),
+		  "r" (sys_reg)
+		: "%rcx", "%r11"
 	);
-
-	if(!sys_reg) {
-		entry();
-	}
 
 }
 
